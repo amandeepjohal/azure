@@ -1686,45 +1686,27 @@ class AzureRMVirtualMachine(AzureRMModuleBase):
             self.fail("Failed to determine PowerState of virtual machine {0}".format(self.name))
         return result
 
-    def power_off_vm(self):
-        self.log("Powered off virtual machine {0}".format(self.name))
-        self.results['actions'].append("Powered off virtual machine {0}".format(self.name))
+    def perform_vm_action(self, result_msg, log_msg, fail_msg, vm_action):
+        self.results['actions'].append("{0} virtual machine {1}".format(result_msg, self.name))
+        self.log("{0} virtual machine {1}".format(log_msg, self.name))
         try:
-            poller = self.compute_client.virtual_machines.power_off(self.resource_group, self.name)
+            poller = vm_action(self.resource_group, self.name)
             self.get_poller_result(poller)
         except Exception as exc:
-            self.fail("Error powering off virtual machine {0} - {1}".format(self.name, str(exc)))
+            self.fail("Error {0} virtual machine {1} - {2}".format(fail_msg, self.name, str(exc)))
         return True
+
+    def power_off_vm(self):
+        return self.perform_vm_action("Powered off", "Powered off ", "powering off", self.compute_client.virtual_machines.power_off)
 
     def power_on_vm(self):
-        self.results['actions'].append("Powered on virtual machine {0}".format(self.name))
-        self.log("Power on virtual machine {0}".format(self.name))
-        try:
-            poller = self.compute_client.virtual_machines.start(self.resource_group, self.name)
-            self.get_poller_result(poller)
-        except Exception as exc:
-            self.fail("Error powering on virtual machine {0} - {1}".format(self.name, str(exc)))
-        return True
+        return self.perform_vm_action("Powered on", "Power on", "powering on", self.compute_client.virtual_machines.start)
 
     def restart_vm(self):
-        self.results['actions'].append("Restarted virtual machine {0}".format(self.name))
-        self.log("Restart virtual machine {0}".format(self.name))
-        try:
-            poller = self.compute_client.virtual_machines.restart(self.resource_group, self.name)
-            self.get_poller_result(poller)
-        except Exception as exc:
-            self.fail("Error restarting virtual machine {0} - {1}".format(self.name, str(exc)))
-        return True
+        return self.perform_vm_action("Restarted", "Restart", "restarting", self.compute_client.virtual_machines.restart)
 
     def deallocate_vm(self):
-        self.results['actions'].append("Deallocated virtual machine {0}".format(self.name))
-        self.log("Deallocate virtual machine {0}".format(self.name))
-        try:
-            poller = self.compute_client.virtual_machines.deallocate(self.resource_group, self.name)
-            self.get_poller_result(poller)
-        except Exception as exc:
-            self.fail("Error deallocating virtual machine {0} - {1}".format(self.name, str(exc)))
-        return True
+        return self.perform_vm_action("Deallocated", "Deallocate", "deallocating", self.compute_client.virtual_machines.deallocate)
 
     def generalize_vm(self):
         self.results['actions'].append("Generalize virtual machine {0}".format(self.name))

@@ -939,6 +939,82 @@ class AzureRMVirtualMachine(AzureRMModuleBase):
         self.log(self.serialize_obj(bsa, 'StorageAccount'), pretty_print=True)
         return bsa
 
+    def validate_vm_parameters(self, disable_ssh_password, image_reference):
+        if not self.admin_username:
+            self.fail("Parameter error: admin_username required when creating a virtual machine.")
+
+        if self.os_type == 'Linux':
+            if disable_ssh_password and not self.ssh_public_keys:
+                self.fail("Parameter error: ssh_public_keys required when disabling SSH password.")
+
+        if not image_reference:
+            self.fail("Parameter error: an image is required when creating a virtual machine.")
+
+        availability_set_resource = None
+        if self.availability_set:
+            parsed_availability_set = parse_resource_id(self.availability_set)
+            availability_set = self.get_availability_set(parsed_availability_set.get('resource_group', self.resource_group),
+                                                         parsed_availability_set.get('name'))
+            availability_set_resource = self.compute_models.SubResource(id=availability_set.id)
+
+            if self.zones:
+                self.fail("Parameter error: you can't use Availability Set and Availability Zones at the same time")
+
+        return availability_set_resource
+
+    def update_data_disk(self):
+        data_disks = []
+        count = 0
+
+        for data_disk in self.data_disks:
+            if not data_disk.get('managed_disk_type'):
+                if not data_disk.get('storage_blob_name'):
+                    data_disk['storage_blob_name'] = self.name + '-data-' + str(count) + '.vhd'
+                    count += 1
+
+                if data_disk.get('storage_account_name'):
+                    data_disk_storage_account = self.get_storage_account(data_disk['storage_account_name'])
+                else:
+                    data_disk_storage_account = self.create_default_storage_account()
+                    self.log("data disk storage account:")
+                    self.log(self.serialize_obj(data_disk_storage_account, 'StorageAccount'), pretty_print=True)
+
+                if not data_disk.get('storage_container_name'):
+                    data_disk['storage_container_name'] = 'vhds'
+
+                data_disk_requested_vhd_uri = 'https://{0}.blob.{1}/{2}/{3}'.format(
+                    data_disk_storage_account.name,
+                    self._cloud_environment.suffixes.storage_endpoint,
+                    data_disk['storage_container_name'],
+                    data_disk['storage_blob_name']
+                )
+
+            if not data_disk.get('managed_disk_type'):
+                data_disk_managed_disk = None
+                disk_name = data_disk['storage_blob_name']
+                data_disk_vhd = self.compute_models.VirtualHardDisk(uri=data_disk_requested_vhd_uri)
+            else:
+                data_disk_vhd = None
+                data_disk_managed_disk = self.compute_models.ManagedDiskParameters(storage_account_type=data_disk['managed_disk_type'])
+                disk_name = self.name + "-datadisk-" + str(count)
+                count += 1
+
+            data_disk['caching'] = data_disk.get(
+                'caching', 'ReadOnly'
+            )
+
+            data_disks.append(self.compute_models.DataDisk(
+                lun=data_disk['lun'],
+                name=disk_name,
+                vhd=data_disk_vhd,
+                caching=data_disk['caching'],
+                create_option=self.compute_models.DiskCreateOptionTypes.empty,
+                disk_size_gb=data_disk['disk_size_gb'],
+                managed_disk=data_disk_managed_disk,
+            ))
+
+        return data_disks
+
     def exec_module(self, **kwargs):
 
         for key in list(self.module_arg_spec.keys()) + ['tags']:
@@ -1205,25 +1281,7 @@ class AzureRMVirtualMachine(AzureRMModuleBase):
                     self.results['actions'].append('Created VM {0}'.format(self.name))
 
                     # Validate parameters
-                    if not self.admin_username:
-                        self.fail("Parameter error: admin_username required when creating a virtual machine.")
-
-                    if self.os_type == 'Linux':
-                        if disable_ssh_password and not self.ssh_public_keys:
-                            self.fail("Parameter error: ssh_public_keys required when disabling SSH password.")
-
-                    if not image_reference:
-                        self.fail("Parameter error: an image is required when creating a virtual machine.")
-
-                    availability_set_resource = None
-                    if self.availability_set:
-                        parsed_availability_set = parse_resource_id(self.availability_set)
-                        availability_set = self.get_availability_set(parsed_availability_set.get('resource_group', self.resource_group),
-                                                                     parsed_availability_set.get('name'))
-                        availability_set_resource = self.compute_models.SubResource(id=availability_set.id)
-
-                        if self.zones:
-                            self.fail("Parameter error: you can't use Availability Set and Availability Zones at the same time")
+                    availability_set_resource = self.validate_vm_parameters(disable_ssh_password, image_reference)
 
                     # Get defaults
                     if not self.network_interface_names:
@@ -1366,56 +1424,7 @@ class AzureRMVirtualMachine(AzureRMModuleBase):
 
                     # data disk
                     if self.data_disks:
-                        data_disks = []
-                        count = 0
-
-                        for data_disk in self.data_disks:
-                            if not data_disk.get('managed_disk_type'):
-                                if not data_disk.get('storage_blob_name'):
-                                    data_disk['storage_blob_name'] = self.name + '-data-' + str(count) + '.vhd'
-                                    count += 1
-
-                                if data_disk.get('storage_account_name'):
-                                    data_disk_storage_account = self.get_storage_account(data_disk['storage_account_name'])
-                                else:
-                                    data_disk_storage_account = self.create_default_storage_account()
-                                    self.log("data disk storage account:")
-                                    self.log(self.serialize_obj(data_disk_storage_account, 'StorageAccount'), pretty_print=True)
-
-                                if not data_disk.get('storage_container_name'):
-                                    data_disk['storage_container_name'] = 'vhds'
-
-                                data_disk_requested_vhd_uri = 'https://{0}.blob.{1}/{2}/{3}'.format(
-                                    data_disk_storage_account.name,
-                                    self._cloud_environment.suffixes.storage_endpoint,
-                                    data_disk['storage_container_name'],
-                                    data_disk['storage_blob_name']
-                                )
-
-                            if not data_disk.get('managed_disk_type'):
-                                data_disk_managed_disk = None
-                                disk_name = data_disk['storage_blob_name']
-                                data_disk_vhd = self.compute_models.VirtualHardDisk(uri=data_disk_requested_vhd_uri)
-                            else:
-                                data_disk_vhd = None
-                                data_disk_managed_disk = self.compute_models.ManagedDiskParameters(storage_account_type=data_disk['managed_disk_type'])
-                                disk_name = self.name + "-datadisk-" + str(count)
-                                count += 1
-
-                            data_disk['caching'] = data_disk.get(
-                                'caching', 'ReadOnly'
-                            )
-
-                            data_disks.append(self.compute_models.DataDisk(
-                                lun=data_disk['lun'],
-                                name=disk_name,
-                                vhd=data_disk_vhd,
-                                caching=data_disk['caching'],
-                                create_option=self.compute_models.DiskCreateOptionTypes.empty,
-                                disk_size_gb=data_disk['disk_size_gb'],
-                                managed_disk=data_disk_managed_disk,
-                            ))
-
+                        data_disks = self.update_data_disk()
                         vm_resource.storage_profile.data_disks = data_disks
 
                     # Before creating VM accept terms of plan if `accept_terms` is True
